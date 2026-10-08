@@ -1,3 +1,5 @@
+import type { ModelConfig } from "./config.js"
+
 export const DEFAULT_BASE_URL = "https://opencode.ai/zen/go/v1"
 
 export interface ModelEntry {
@@ -23,8 +25,8 @@ export const DEFAULT_MODELS: ModelEntry[] = [
   { id: "qwen3.5-plus", name: "Qwen3.5 Plus" },
 ]
 
-export function cloneDefaultModels(): Record<string, Record<string, unknown>> {
-  const result: Record<string, Record<string, unknown>> = {}
+export function cloneDefaultModels(): Record<string, ModelConfig> {
+  const result: Record<string, ModelConfig> = {}
   for (const model of DEFAULT_MODELS) {
     result[model.id] = { name: model.name }
   }

@@ -1,12 +1,10 @@
 # opencode-go-multi-auth
 
-OpenCode plugin that exposes multiple OpenCode Go subscription identities as separate, selectable providers — each backed by a different API key.
+OpenCode **V2** plugin that exposes multiple OpenCode Go subscription identities as separate, selectable providers, each backed by its own API key.
 
-If you have more than one OpenCode Go account (personal, work, alt, etc.) and want to switch between them per-conversation in OpenCode without re-authenticating, this plugin gives you one `opencode-go-<id>/*` provider per account.
+Select an account by choosing its model namespace, such as `opencode-go-personal/glm-5.1` or `opencode-go-work/glm-5.1`. Each provider has independent credentials. The plugin discovers the live model catalog and probes each model's API format, using native OpenAI-compatible or Anthropic-compatible routing as appropriate.
 
-## Why this exists
-
-OpenCode's stock OpenCode Go provider supports one API key at a time. This plugin registers N parallel providers, one per profile you define, each with its own `apiKey` pulled from an environment variable. At startup it fetches the live model list from each profile's endpoint and probes each model to determine its API format; models that use the openai-compatible format are registered normally, while models that require the Anthropic messages format get a per-model provider override. Pick the account by selecting the matching model namespace in OpenCode's model picker (e.g. `opencode-go-personal/glm-5` vs `opencode-go-alt/glm-5`).
+Version 0.2.0 targets the OpenCode V2 plugin API shipped with `@opencode/plugin` **2.0.24**. It does not expose the V1 plugin function. For OpenCode V1, use the earlier 0.1.x implementation.
 
 ## Install
 
@@ -17,265 +15,174 @@ npm install
 npm run build
 ```
 
-This produces `dist/index.js`, which is what OpenCode loads.
+Use Node.js 20 or later to build. Keep the clone and its `node_modules` on disk: OpenCode imports `dist/index.js`, whose runtime dependency is `@opencode/plugin`.
 
 ## Configuration
 
-OpenCode loads plugins via the `plugin` field in `~/.config/opencode/opencode.jsonc`. **This plugin requires a thin local shim file** (see the next section) because of two limitations in current OpenCode releases:
-
-1. **Custom top-level config keys are rejected.** Putting `"opencodeGoMultiAuth": { profiles: [...] }` directly in `opencode.jsonc` triggers `ConfigInvalidError` at startup — OpenCode validates against a fixed schema.
-2. **Plugin options are not delivered at runtime.** The `[path, options]` tuple form is declared in OpenCode's schema and in `@opencode-ai/plugin`'s TypeScript types (`plugin?: Array<string | [string, PluginOptions]>`), but the runtime currently passes `options === undefined` to the plugin function.
-
-The workaround is a shim file that invokes the plugin directly with hardcoded options. This is a one-time setup that takes about thirty seconds.
-
-### Step 1 — create the shim
-
-Save this as `~/.config/opencode/plugins/opencode-go-multi-auth.js`. Adjust the absolute path to wherever you cloned the repo:
-
-```js
-import plugin from "file:///absolute/path/to/opencode-go-multiauth/dist/index.js"
-
-const profiles = [
-  {
-    id: "personal",
-    name: "OpenCode Go Personal",
-    apiKeyEnv: "OPENCODE_GO_PERSONAL_KEY",
-  },
-  {
-    id: "alt",
-    name: "OpenCode Go Alt",
-    apiKeyEnv: "OPENCODE_GO_ALT_KEY",
-  },
-]
-
-export default async function (input, _options) {
-  return plugin(input, { profiles })
-}
-```
-
-Files placed in `~/.config/opencode/plugins/` are auto-discovered — you do **not** need to add this path to the `plugin` array in `opencode.jsonc`. Adding it there causes OpenCode to try to npm-install the relative path and emit a spurious "unknown git error" in the log.
-
-### Step 2 — export the API keys
-
-The plugin reads each profile's API key from `process.env[apiKeyEnv]`. In your shell profile (`~/.zshrc`, `~/.bashrc`, etc.):
-
-```bash
-export OPENCODE_GO_PERSONAL_KEY="oc_go_xxxxxxxx"
-export OPENCODE_GO_ALT_KEY="oc_go_yyyyyyyy"
-```
-
-If an env var is missing at startup, the plugin skips that profile and logs a single line to stderr — it will not crash OpenCode.
-
-### Step 3 — restart OpenCode
-
-Run `opencode models` and confirm the new providers appear:
-
-```
-opencode-go-personal/glm-5
-opencode-go-personal/kimi-k2.5
-...
-opencode-go-alt/glm-5
-opencode-go-alt/kimi-k2.5
-...
-```
-
-You can also reference them in your `opencode.jsonc`:
+Add an entry to the **`plugins`** array in your V2 `opencode.jsonc`. Use the absolute path to the cloned repository:
 
 ```jsonc
 {
-  "model": "opencode-go-personal/kimi-k2.5",
-  "small_model": "opencode-go-alt/minimax-m2.7"
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "/absolute/path/to/opencode-go-multiauth",
+      "options": {
+        "profiles": [
+          {
+            "id": "personal",
+            "name": "OpenCode Go Personal",
+            "apiKeyEnv": "OPENCODE_GO_PERSONAL_KEY"
+          },
+          {
+            "id": "work",
+            "name": "OpenCode Go Work",
+            "apiKeyEnv": "OPENCODE_GO_WORK_KEY"
+          }
+        ]
+      }
+    }
+  ],
+  "model": "opencode-go-personal/glm-5.1"
 }
 ```
+
+V2 delivers `options` directly to the plugin. A shim and a custom top-level `opencodeGoMultiAuth` key are no longer needed.
+
+Export the API keys in the shell that launches OpenCode, or in its shell profile:
+
+```bash
+export OPENCODE_GO_PERSONAL_KEY="oc_go_xxxxxxxx"
+export OPENCODE_GO_WORK_KEY="oc_go_yyyyyyyy"
+```
+
+Restart OpenCode after building or changing dependencies. Verify that `opencode-go-multi-auth` appears in the active plugin list and that the model picker contains the account namespaces. Through the V2 CLI API:
+
+```bash
+opencode api get /api/plugin
+opencode api get /api/provider
+opencode api get /api/model
+```
+
+Use `opencode2` instead if that is the name of your V2 executable. A profile with an unset or empty API key is skipped with a diagnostic naming only the environment variable.
+
+### Migrating an existing V1 installation
+
+1. Build this version with `npm install` and `npm run build`.
+2. Remove the old function-based shim from your OpenCode plugin directories so V2 does not try to load it.
+3. Move the same profiles into the `plugins` object entry shown above. Replace the singular V1 `plugin` field, and remove any `opencodeGoMultiAuth` top-level section.
+4. Keep your existing environment variables and model references, then restart OpenCode.
+
+The generated provider IDs and model aliases stay the same. Legacy static model overrides using `provider: { npm: "@ai-sdk/anthropic", api: "..." }` are translated into V2 package/settings overrides. For new configurations, use the native fields below.
 
 ## Profile schema
 
-| Field        | Required | Default                          | Description                                       |
-|--------------|----------|----------------------------------|---------------------------------------------------|
-| `id`         | yes      | —                                | Short identifier (lowercase, digits, hyphens)     |
-| `name`       | yes      | —                                | Display name shown in OpenCode's model picker     |
-| `apiKeyEnv`  | yes      | —                                | Env var holding the API key for this profile      |
-| `providerId` | no       | `opencode-go-${id}`              | Override the generated provider ID                |
-| `baseURL`    | no       | `https://opencode.ai/zen/go/v1`  | Override the upstream base URL                    |
-| `models`     | no       | Live list fetched from `/models` | Override the model catalog for this profile; skips probing entirely  |
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `id` | yes | — | Starts with a lowercase letter; lowercase letters, digits, and hyphens |
+| `name` | yes | — | Display name in the model picker |
+| `apiKeyEnv` | yes | — | Environment variable containing this account's API key |
+| `providerId` | no | `opencode-go-${id}` | Override the provider ID using the same identifier rules |
+| `baseURL` | no | `https://opencode.ai/zen/go/v1` | Upstream API base URL |
+| `models` | no | Live catalog from `/models` | Static map of model aliases to model overrides; skips discovery and probing |
 
-## Validation
+### Static models
 
-The plugin runs the following checks at startup and reports each failure to stderr:
+Static entries use V2 model fields. Defaults come from `Model.Info.default`: models are enabled, support tools and text/image input, and have a 200,000-token context limit and 32,000-token output limit. Set capabilities and limits to match your selected upstream models. Use `modelID` when an alias differs from the upstream ID.
 
-- Missing or empty `id`, `name`, or `apiKeyEnv`
-- Duplicate `id`
-- Duplicate generated `providerId`
-- Malformed `id` or `providerId` (must match `^[a-z][a-z0-9-]*$`)
-- Env var named by `apiKeyEnv` is unset or empty
-- Empty profile list
-
-A profile that fails any check is dropped; the rest still register. The plugin never throws during normal operation.
-
-## Optional: JSON-driven shim
-
-If you'd rather not edit JavaScript to add/remove accounts, point the shim at a JSON file:
-
-```js
-import { readFileSync } from "fs"
-import { homedir } from "os"
-import { join } from "path"
-import plugin from "file:///absolute/path/to/opencode-go-multiauth/dist/index.js"
-
-const CONFIG_PATH = join(homedir(), ".config", "opencode", "opencode-go.json")
-
-function loadProfiles() {
-  const data = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"))
-  if (!Array.isArray(data.accounts)) return []
-  return data.accounts
-    .filter((a) => a && a.id && a.name && a.apiKeyEnv)
-    .map((a) => ({ id: a.id, name: a.name, apiKeyEnv: a.apiKeyEnv }))
-}
-
-const profiles = loadProfiles()
-
-export default async function (input, _options) {
-  return plugin(input, { profiles })
+```jsonc
+{
+  "id": "personal",
+  "name": "OpenCode Go Personal",
+  "apiKeyEnv": "OPENCODE_GO_PERSONAL_KEY",
+  "models": {
+    "glm-5.1": { "name": "GLM-5.1" },
+    "qwen3.7-max": {
+      "name": "Qwen3.7 Max",
+      "package": "@opencode/ai/providers/anthropic"
+    }
+  }
 }
 ```
 
-…with `~/.config/opencode/opencode-go.json`:
+Every model inherits its account's API key and base URL through provider settings. Per-model `package` selects a native adapter; per-model `settings` can override its base URL. Do not put API keys in model overrides.
+
+## Discovery and validation
+
+At setup, each account fetches `/models`, then probes discovered models in parallel. Profiles are also loaded concurrently. Each HTTP fetch has a 3-second timeout. A format mismatch on `/chat/completions` triggers an Anthropic `/messages` probe. Inconclusive probes retain the model: `qwen*` defaults to Anthropic-compatible routing and other models to OpenAI-compatible routing. If catalog discovery fails, the bundled default catalog is used.
+
+Discovery finishes before the synchronous provider transform is registered. Replaying that transform performs no network work. OpenCode owns the registration lifecycle and removes it when the plugin unloads.
+
+Invalid profile objects, missing required fields, malformed or duplicate IDs, invalid optional field types, and missing API-key variables are reported and skipped individually. No profiles means no provider registrations.
+
+## Optional: JSON-driven local plugin
+
+To keep accounts in a shared JSON file, create a **V2 object-based** wrapper in your auto-discovered `~/.config/opencode/plugins/` directory. Do not also configure this plugin in the `plugins` array, as that would load it twice.
+
+```js
+import { readFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
+import plugin from "file:///absolute/path/to/opencode-go-multiauth/dist/index.js"
+
+export default {
+  id: plugin.id,
+  async setup(ctx) {
+    const path = join(homedir(), ".config", "opencode", "opencode-go.json")
+    const { accounts } = JSON.parse(readFileSync(path, "utf8"))
+    return plugin.setup({ ...ctx, options: { ...ctx.options, profiles: accounts } })
+  },
+}
+```
+
+Use this JSON structure, including any optional profile fields you need:
 
 ```json
 {
   "accounts": [
     { "id": "personal", "name": "OpenCode Go Personal", "apiKeyEnv": "OPENCODE_GO_PERSONAL_KEY" },
-    { "id": "alt",      "name": "OpenCode Go Alt",      "apiKeyEnv": "OPENCODE_GO_ALT_KEY" }
+    { "id": "work", "name": "OpenCode Go Work", "apiKeyEnv": "OPENCODE_GO_WORK_KEY" }
   ]
 }
 ```
 
-This pattern lets other tools (e.g. a usage-monitor plugin) share the same account list.
-
 ## Security
 
-- API keys are never logged, printed, or echoed by the plugin
-- Error messages reference only the env var name, never its value
-- Each registered provider holds its own `options.apiKey` — there is no shared mutable auth state between profiles
-- When dynamic model probing is active (i.e. no static `models` override on a profile), the plugin makes outbound HTTP requests to the configured `baseURL` at startup: one `GET /models` and one `POST` probe per discovered model. These requests carry the profile's API key in an `Authorization` or `x-api-key` header. No keys or response data are written to disk or logged.
+- The plugin never logs API keys or upstream response bodies. Fallback diagnostics identify only the affected profile.
+- Each provider holds its own `settings.apiKey`; there is no shared mutable authentication state between accounts.
+- Unless a static `models` map is supplied, startup makes authenticated requests to the profile's configured `baseURL`: one `GET /models`, one OpenAI-compatible probe per model, and an additional Anthropic probe after an explicit format mismatch. These are small inference requests and may consume subscription usage.
+- Keys are sent in `Authorization` or `x-api-key` headers. The plugin does not write keys or response data to disk.
 
-## Verifying the keys are actually distinct
-
-If you want to confirm that two profiles really hit two different upstream accounts (rather than silently collapsing onto the same key), the simplest check is:
-
-```bash
-curl -sS -H "Authorization: Bearer $OPENCODE_GO_PERSONAL_KEY" https://opencode.ai/zen/go/v1/models | head -c 200
-curl -sS -H "Authorization: Bearer $OPENCODE_GO_ALT_KEY"      https://opencode.ai/zen/go/v1/models | head -c 200
-```
-
-Both should return HTTP 200, and your OpenCode Go workspace dashboards (https://opencode.ai/workspace/<id>/go) should show divergent usage after you exercise each account.
-
-## Build
+## Build and verify
 
 ```bash
 npm install
-npm run build       # tsc → dist/
-npm run typecheck   # tsc --noEmit
-```
-
-The plugin has only `@opencode-ai/plugin` as a peer dependency; no runtime deps.
-
-<details>
-<summary><strong>Agent installation instructions</strong></summary>
-
-This section is written for an LLM agent installing this plugin on behalf of a user. Follow each step precisely.
-
-### Prerequisites
-
-Confirm the following before proceeding:
-
-1. Node.js 20 or later is available (`node --version`).
-2. The user has at least one OpenCode Go API key stored in an environment variable (e.g. `OPENCODE_GO_PERSONAL_KEY`). If not, ask the user for the env var name(s) and key value(s) before continuing.
-
-### Step 1 — Clone and build
-
-Choose a permanent location to clone the repo (the built plugin must remain on disk — OpenCode loads it from the path you set in the shim):
-
-```bash
-git clone https://github.com/schlambos/opencode-go-multiauth.git ~/opencode-plugins/opencode-go-multiauth
-cd ~/opencode-plugins/opencode-go-multiauth
-npm install
+npm run typecheck
 npm run build
+npm test
+npm pack --dry-run
 ```
 
-Verify `dist/index.js` exists after the build before continuing.
+Tests use dummy credentials and mocked endpoints, covering V2 setup, schema-valid providers and models, independent account credentials, replay without HTTP requests, static routing, format detection, timeouts, and fallback behavior. They do not use real accounts.
 
-### Step 2 — Create the shim
+Published packages include the compiled entrypoint and declarations; `@opencode/plugin` is a production dependency so package installation can resolve its runtime imports.
 
-OpenCode auto-discovers any `.js` file placed in `~/.config/opencode/plugins/`. Create that directory if it does not exist, then write the shim.
-
-Confirm `~/.config/opencode/plugins/` exists:
-
-```bash
-mkdir -p ~/.config/opencode/plugins
-```
-
-Write `~/.config/opencode/plugins/opencode-go-multi-auth.js`. Replace the path on the first line with the absolute path to wherever you cloned the repo in Step 1, and replace the profile list with the user's actual accounts (one object per account):
-
-```js
-import plugin from "file:///HOME/opencode-plugins/opencode-go-multiauth/dist/index.js"
-
-const profiles = [
-  {
-    id: "personal",
-    name: "OpenCode Go Personal",
-    apiKeyEnv: "OPENCODE_GO_PERSONAL_KEY",
-  },
-  // Add more profiles here if the user has additional accounts.
-  // Each profile needs: id (lowercase, digits, hyphens), name, apiKeyEnv.
-]
-
-export default async function (input, _options) {
-  return plugin(input, { profiles })
-}
-```
-
-**Do not** add this path to the `plugin` array in `opencode.jsonc` — files in `~/.config/opencode/plugins/` are auto-discovered. Adding it manually causes a spurious "unknown git error" in the log.
-
-### Step 3 — Export the API keys
-
-The plugin reads each profile's key from `process.env[apiKeyEnv]`. Ensure the relevant env vars are exported in the user's shell profile (`~/.zshrc`, `~/.bashrc`, etc.) and are available in the current session. If they are not yet set, add lines of the form:
-
-```bash
-export OPENCODE_GO_PERSONAL_KEY="oc_go_xxxxxxxx"
-```
-
-Ask the user for any key values you do not already have. Never guess or fabricate key values.
-
-### Step 4 — Verify
-
-Ask the user to restart OpenCode, then run:
-
-```bash
-opencode models
-```
-
-Confirm that entries of the form `opencode-go-<id>/<model-id>` appear for each configured profile. If a profile is missing, check:
-
-- The env var named by `apiKeyEnv` is set and non-empty in the shell that launched OpenCode.
-- The shim file is valid ESM (use `node --input-type=module < ~/.config/opencode/plugins/opencode-go-multi-auth.js` to check for syntax errors).
-- `dist/index.js` exists at the path referenced in the shim.
-- The `/models` endpoint is reachable with the user's key (see the "Verifying the keys are actually distinct" section).
-
-### Profile fields reference
-
-| Field        | Required | Default                         | Notes                                              |
-|--------------|----------|---------------------------------|----------------------------------------------------|
-| `id`         | yes      | —                               | Lowercase letters, digits, hyphens; must start with a letter |
-| `name`       | yes      | —                               | Display name in OpenCode's model picker            |
-| `apiKeyEnv`  | yes      | —                               | Name of the env var holding the API key            |
-| `providerId` | no       | `opencode-go-${id}`             | Override the generated provider ID                 |
-| `baseURL`    | no       | `https://opencode.ai/zen/go/v1` | Override the upstream base URL                     |
-| `models`     | no       | Live list from `/models`        | Provide a static model map to skip probing         |
-
-</details>
+Official references: [V2 plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1) and [V2 provider transforms](https://opencode.ai/v2/docs/build/plugins/).
 
 ## Changelog
+
+### 0.2.0 — 2026-10-08
+
+**OpenCode V2 migration**
+
+- Replaced the V1 function/config hook with a stable `Plugin.define` ID and `setup(ctx)`, reading profiles directly from `ctx.options`.
+- Register account providers and complete model definitions through V2's synchronous `ctx.provider.transform`. Discovery finishes before registration, so transform replay does not make network requests; profiles are discovered concurrently.
+- Use native `@opencode/ai` OpenAI-compatible and Anthropic packages, with credentials in provider settings and format overrides on individual models. Preserve account/model namespaces, timeout fallbacks, and static catalogs; translate legacy static `provider.npm`/`provider.api` overrides.
+- Add a root `server.js` entrypoint and a `./server` package export so V2 can resolve both local plugin directories and installed packages.
+- Replace the V1 peer dependency with a pinned runtime dependency on `@opencode/plugin` 2.0.24 and update the package version to 0.2.0.
+- Replace the mandatory V1 shim instructions with V2 `plugins` object configuration and an optional JSON-driven V2 wrapper. Document removal of old shims and keep credentials out of fallback diagnostics.
+- Verified loading with OpenCode 2.0.24, including an installed package, and live GLM-5.1 and Qwen3.7 Max requests.
+- Validate malformed profile objects and optional field types without stopping valid accounts, and add migration tests for account isolation, native model schemas, replay, format routing, and discovery failures.
 
 ### 0.1.4 — 2026-06-01
 

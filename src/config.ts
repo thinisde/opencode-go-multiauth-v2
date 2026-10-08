@@ -1,4 +1,12 @@
+import type { Model } from "@opencode/plugin"
 import { DEFAULT_BASE_URL } from "./models.js"
+
+export type ModelConfig = {
+  -readonly [K in keyof Omit<Model.Info, "id" | "providerID">]?: Model.Info[K]
+} & {
+  /** Legacy V1 per-model routing; translated to a native V2 package. */
+  provider?: { npm?: string; api?: string }
+}
 
 export interface ProfileConfig {
   id: string
@@ -6,7 +14,7 @@ export interface ProfileConfig {
   apiKeyEnv: string
   providerId?: string
   baseURL?: string
-  models?: Record<string, Record<string, unknown>>
+  models?: Record<string, ModelConfig>
 }
 
 export interface ResolvedProfile {
@@ -16,7 +24,7 @@ export interface ResolvedProfile {
   baseURL: string
   apiKeyEnv: string
   apiKey: string
-  models?: Record<string, Record<string, unknown>>
+  models?: Record<string, ModelConfig>
 }
 
 export interface ConfigError {
@@ -29,7 +37,7 @@ function isValidProviderId(id: string): boolean {
   return PROVIDER_ID_RE.test(id)
 }
 
-export function resolveProfiles(input: ProfileConfig[]): {
+export function resolveProfiles(input: unknown[]): {
   profiles: ResolvedProfile[]
   errors: ConfigError[]
 } {
@@ -43,13 +51,23 @@ export function resolveProfiles(input: ProfileConfig[]): {
     return { profiles: [], errors }
   }
 
-  for (const profile of input) {
+  for (const value of input) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      errors.push({ message: "A profile must be an object" })
+      continue
+    }
+    const profile = value as ProfileConfig
     if (!profile.id || typeof profile.id !== "string" || profile.id.trim() === "") {
       errors.push({ message: "A profile is missing the required 'id' field" })
       continue
     }
 
     const id = profile.id.trim()
+
+    if (!isValidProviderId(id)) {
+      errors.push({ message: `Profile id "${id}" must start with a lowercase letter and contain only lowercase letters, digits, and hyphens.` })
+      continue
+    }
 
     if (seenIds.has(id)) {
       errors.push({ message: `Duplicate profile id: "${id}"` })
@@ -70,6 +88,22 @@ export function resolveProfiles(input: ProfileConfig[]): {
     }
 
     const apiKeyEnv = profile.apiKeyEnv.trim()
+
+    if (profile.providerId !== undefined && typeof profile.providerId !== "string") {
+      errors.push({ message: `Profile "${id}" has a non-string providerId` })
+      continue
+    }
+    if (profile.baseURL !== undefined && typeof profile.baseURL !== "string") {
+      errors.push({ message: `Profile "${id}" has a non-string baseURL` })
+      continue
+    }
+    if (profile.models !== undefined && (
+      !profile.models || typeof profile.models !== "object" || Array.isArray(profile.models) ||
+      Object.values(profile.models).some(model => !model || typeof model !== "object" || Array.isArray(model))
+    )) {
+      errors.push({ message: `Profile "${id}" has an invalid models map` })
+      continue
+    }
 
     let providerId: string
     if (profile.providerId) {

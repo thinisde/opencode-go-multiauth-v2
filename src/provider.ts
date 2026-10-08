@@ -1,4 +1,5 @@
-import type { ResolvedProfile } from "./config.js"
+import { Model, Provider, type Plugin } from "@opencode/plugin"
+import type { ModelConfig, ResolvedProfile } from "./config.js"
 import { cloneDefaultModels, DEFAULT_MODELS } from "./models.js"
 
 const PROBE_TIMEOUT_MS = 3000
@@ -17,92 +18,103 @@ async function timedFetch(
   }
 }
 
-function getOrCreateRecord(
-  parent: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  const current = parent[key]
-  if (current && typeof current === "object" && !Array.isArray(current)) {
-    return current as Record<string, unknown>
-  }
-  const next: Record<string, unknown> = {}
-  parent[key] = next
-  return next
+export interface ProviderSource {
+  info: Provider.Info
+  models: Model.Info[]
+}
+
+const OPENAI_PACKAGE = "@opencode/ai/providers/openai-compatible"
+const ANTHROPIC_PACKAGE = "@opencode/ai/providers/anthropic"
+
+function nativePackage(value: string | undefined): string | undefined {
+  if (value === "@ai-sdk/openai-compatible") return OPENAI_PACKAGE
+  if (value === "@ai-sdk/anthropic") return ANTHROPIC_PACKAGE
+  return value
 }
 
 export async function buildProviderConfig(
   profile: ResolvedProfile,
-): Promise<Record<string, unknown>> {
+): Promise<ProviderSource> {
   let models = profile.models
 
   if (!models) {
     try {
       models = await fetchAndProbeModels(profile)
-    } catch (e) {
-      console.warn(`[opencode-go-multi-auth] Failed to dynamically fetch models for ${profile.id}:`, e)
+    } catch {
+      console.warn(`[opencode-go-multi-auth] Failed to dynamically fetch models for ${profile.id}; using the default catalog.`)
       models = cloneDefaultModels()
-      
+
       // Fallback: qwen models require the Anthropic messages format.
-      const anthropicApi = profile.baseURL ? profile.baseURL.replace(/\/v1$/, '') + "/v1" : "https://opencode.ai/zen/go/v1"
-      for (const [id, modelDef] of Object.entries(models)) {
-        if (id.startsWith("qwen") && typeof modelDef === "object" && modelDef !== null) {
-          ;(modelDef as Record<string, unknown>).provider = {
-            npm: "@ai-sdk/anthropic",
-            api: anthropicApi,
-          }
+      for (const [id, model] of Object.entries(models)) {
+        if (id.startsWith("qwen")) {
+          model.package = ANTHROPIC_PACKAGE
         }
       }
     }
   }
 
+  const providerID = Provider.ID.make(profile.providerId)
   return {
-    npm: "@ai-sdk/openai-compatible",
-    name: profile.name,
-    options: {
-      apiKey: profile.apiKey,
-      baseURL: profile.baseURL,
+    info: {
+      ...Provider.Info.empty(providerID),
+      name: profile.name,
+      activation: "enabled",
+      package: OPENAI_PACKAGE,
+      settings: { apiKey: profile.apiKey, baseURL: profile.baseURL },
     },
-    models,
+    models: Object.entries(models).map(([id, definition]) => {
+      const { provider: legacy, ...overrides } = definition
+      return {
+        ...Model.Info.default(providerID, Model.ID.make(id)),
+        ...overrides,
+        id: Model.ID.make(id),
+        providerID,
+        modelID: Model.ID.make(definition.modelID ?? id),
+        package: nativePackage(definition.package ?? legacy?.npm),
+        ...(legacy?.api ? {
+          settings: { baseURL: legacy.api, ...definition.settings },
+        } : {}),
+      }
+    }),
   }
 }
 
-export async function injectProfiles(
-  config: Record<string, unknown>,
+export async function registerProfiles(
+  provider: Pick<Plugin.Context["provider"], "transform">,
   profiles: ResolvedProfile[],
 ): Promise<void> {
-  const providers = getOrCreateRecord(config, "provider")
-
-  for (const profile of profiles) {
-    providers[profile.providerId] = await buildProviderConfig(profile)
-  }
+  // Network work must finish before registering the synchronous, replayable transform.
+  const sources = await Promise.all(profiles.map(buildProviderConfig))
+  await provider.transform((editor) => {
+    for (const source of sources) editor.add(source)
+  })
 }
 
-async function fetchAndProbeModels(profile: ResolvedProfile): Promise<Record<string, Record<string, unknown>>> {
-  const baseUrl = profile.baseURL
-  const modelsUrl = `${baseUrl.replace(/\/$/, '')}/models`
-  
+async function fetchAndProbeModels(profile: ResolvedProfile): Promise<Record<string, ModelConfig>> {
+  const baseUrl = profile.baseURL.replace(/\/+$/, "")
+  const modelsUrl = `${baseUrl}/models`
+
   const res = await timedFetch(modelsUrl, {
     headers: { 'Authorization': `Bearer ${profile.apiKey}` }
   }, PROBE_TIMEOUT_MS)
-  
+
   if (!res.ok) {
     throw new Error(`Models fetch failed: ${res.status} ${res.statusText}`)
   }
-  
+
   const data = await res.json() as { data?: { id: string }[] }
   if (!data.data || !Array.isArray(data.data)) {
     throw new Error("Invalid models response format")
   }
-  
+
   const discoveredModels = data.data.map(m => m.id)
-  const anthropicApi = baseUrl.replace(/\/v1$/, '') + "/v1"
 
   // Build a model entry, applying the Anthropic override only when needed.
-  const makeEntry = (modelId: string, format: 'oa-compat' | 'anthropic'): Record<string, unknown> => {
+  const makeEntry = (modelId: string, format: 'oa-compat' | 'anthropic'): ModelConfig => {
     const name = DEFAULT_MODELS.find(m => m.id === modelId)?.name || modelId
-    const entry: Record<string, unknown> = { name }
+    const entry: ModelConfig = { name }
     if (format === 'anthropic') {
-      entry.provider = { npm: "@ai-sdk/anthropic", api: anthropicApi }
+      entry.package = ANTHROPIC_PACKAGE
     }
     return entry
   }
@@ -114,7 +126,7 @@ async function fetchAndProbeModels(profile: ResolvedProfile): Promise<Record<str
   // Seed EVERY discovered model up front. Model visibility comes from the
   // /models endpoint, not from probe success — so a slow or aborted probe
   // never causes a model (or the whole provider) to disappear.
-  const result: Record<string, Record<string, unknown>> = {}
+  const result: Record<string, ModelConfig> = {}
   for (const modelId of discoveredModels) {
     result[modelId] = makeEntry(modelId, requiresAnthropic(modelId) ? 'anthropic' : 'oa-compat')
   }
@@ -123,7 +135,7 @@ async function fetchAndProbeModels(profile: ResolvedProfile): Promise<Record<str
   // probe leaves the seeded default in place.
   const probes = discoveredModels.map(async (modelId) => {
     try {
-      const oaRes = await timedFetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      const oaRes = await timedFetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${profile.apiKey}`,
@@ -160,7 +172,7 @@ async function fetchAndProbeModels(profile: ResolvedProfile): Promise<Record<str
           return { id: modelId, format: 'anthropic' as const }
         }
       }
-    } catch (e) {
+    } catch {
       // Ignore network errors / aborts on individual probes; keep the default.
     }
     return { id: modelId, format: 'unknown' as const }
