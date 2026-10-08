@@ -146,6 +146,14 @@ Use this JSON structure, including any optional profile fields you need:
 }
 ```
 
+## Thinking options
+
+Account models inherit variants, context limits, and capabilities from OpenCode's built-in `opencode-go` catalog, falling back to its `opencode` catalog for matching model IDs. T3 Code uses these variants to show its **Reasoning** selector. For example, select `opencode-go-2/muse-spark-1.3-contributor#high` to request high reasoning effort.
+
+Only models with catalog variants expose a selector; models with fixed thinking behavior or no matching catalog entry keep their existing defaults. A static model's explicit `variants` array overrides the inherited options, including `[]` to disable the selector. Credentials and request routing remain specific to each account.
+
+After rebuilding a locally installed plugin, reload the OpenCode configuration and refresh T3's OpenCode provider models so the updated metadata appears.
+
 ## Security
 
 - The plugin never logs API keys or upstream response bodies. Fallback diagnostics identify only the affected profile.
@@ -170,6 +178,11 @@ Published packages include the compiled entrypoint and declarations; `@opencode/
 Official references: [V2 plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1) and [V2 provider transforms](https://opencode.ai/v2/docs/build/plugins/).
 
 ## Changelog
+
+### 0.2.2 — 2026-10-08
+
+- Preserve built-in OpenCode model variants and their native protocols when registering account aliases, restoring T3 Code's Reasoning selector for models with configurable thinking. Inherit model limits and capabilities without copying another provider's credentials or API URL; explicit routing overrides still win.
+- Keep explicit static metadata overrides, including an empty variants array, and leave unknown or fixed-thinking models without invented options. Add regression coverage for inheritance, account isolation, and transform replay.
 
 ### 0.2.1 — 2026-10-08
 

@@ -86,7 +86,32 @@ export async function registerProfiles(
   // Network work must finish before registering the synchronous, replayable transform.
   const sources = await Promise.all(profiles.map(buildProviderConfig))
   await provider.transform((editor) => {
-    for (const source of sources) editor.add(source)
+    for (const [index, source] of sources.entries()) {
+      const profile = profiles[index]
+      const models = source.models.map((model) => {
+        // Source records include inactive built-ins, so no account must be
+        // authenticated just to inherit its catalog's reasoning controls.
+        const catalog = editor.get("opencode-go")?.models.get(model.modelID)
+          ?? editor.get("opencode")?.models.get(model.modelID)
+        if (!catalog) return model
+
+        const explicit = profile.models?.[model.id]
+        const inherited: Partial<Model.Info> = {}
+        // Variant settings must use the same native protocol as their catalog
+        // model (for example, Muse uses Responses). Explicit routing wins.
+        if (model.package === undefined && !explicit?.package && !explicit?.provider?.npm) {
+          Object.assign(inherited, { package: catalog.package })
+        }
+        for (const key of ["variants", "capabilities", "compatibility", "limit", "family", "time"] as const) {
+          if (explicit?.[key] === undefined) {
+            Object.assign(inherited, { [key]: structuredClone(catalog[key]) })
+          }
+        }
+        // Credentials, URLs, and base request settings stay account-specific.
+        return { ...model, ...inherited }
+      })
+      editor.add({ ...source, models })
+    }
   })
 }
 

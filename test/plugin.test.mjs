@@ -41,18 +41,18 @@ function diagnostics(t) {
   return logs
 }
 
-function context(options) {
+function context(options, catalog = new Map()) {
   const sources = []
   let replay
   return {
     sources,
-    replay: () => replay({ add: (source) => sources.push(source) }),
+    replay: () => replay({ get: (id) => catalog.get(id), add: (source) => sources.push(source) }),
     ctx: {
       options,
       provider: {
         async transform(callback) {
           replay = callback
-          assert.equal(callback({ add: (source) => sources.push(source) }), undefined)
+          assert.equal(callback({ get: (id) => catalog.get(id), add: (source) => sources.push(source) }), undefined)
           return { async dispose() {} }
         },
       },
@@ -114,6 +114,43 @@ test("static V2 model routing, aliases, and legacy overrides are preserved", asy
   assert.equal(source.models[2].settings.baseURL, "https://example.invalid/legacy/v1")
   assert.equal("provider" in source.models[2], false)
   assert.equal(fetch.mock.callCount(), 0)
+})
+
+test("account aliases inherit catalog variants and protocols without borrowing credentials or replacing overrides", async (t) => {
+  environment(t)
+  const id = Provider.ID.make("opencode-go")
+  const native = {
+    ...Model.Info.default(id, Model.ID.make("reasoner")),
+    variants: [{ id: "high", settings: { reasoningEffort: "high" } }],
+    limit: { context: 200000, output: 32000 },
+    settings: { apiKey: "another-account", baseURL: "https://other.invalid" },
+    package: ANT,
+  }
+  const catalog = new Map([["opencode-go", { models: new Map([["reasoner", native]]) }]])
+  const configured = context({ profiles: [{
+    ...personal,
+    models: {
+      automatic: { modelID: "reasoner" },
+      custom: { modelID: "reasoner", package: OA, variants: [], limit: { context: 1000, output: 100 } },
+      unknown: {},
+    },
+  }] }, catalog)
+  await plugin.setup(configured.ctx)
+  const [automatic, custom, unknown] = configured.sources[0].models
+  valid(configured.sources[0])
+  assert.deepEqual(automatic.variants, native.variants)
+  assert.deepEqual(automatic.limit, native.limit)
+  assert.equal(automatic.providerID, "opencode-go-personal")
+  assert.equal(automatic.settings, undefined)
+  assert.equal(automatic.package, ANT)
+  assert.equal(custom.package, OA)
+  assert.deepEqual(custom.variants, [])
+  assert.equal(custom.limit.context, 1000)
+  assert.deepEqual(unknown.variants, [])
+  automatic.variants[0].settings.reasoningEffort = "low"
+  assert.equal(native.variants[0].settings.reasoningEffort, "high")
+  configured.replay()
+  assert.equal(configured.sources[1].models[0].variants[0].settings.reasoningEffort, "high")
 })
 
 test("discovery uses account credentials and detects Anthropic routing", async (t) => {
