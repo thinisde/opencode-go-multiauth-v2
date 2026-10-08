@@ -31,6 +31,7 @@ export interface ConfigError {
   message: string
 }
 
+const PROFILE_ID_RE = /^[a-z0-9][a-z0-9-]*$/
 const PROVIDER_ID_RE = /^[a-z][a-z0-9-]*$/
 
 function isValidProviderId(id: string): boolean {
@@ -64,8 +65,8 @@ export function resolveProfiles(input: unknown[]): {
 
     const id = profile.id.trim()
 
-    if (!isValidProviderId(id)) {
-      errors.push({ message: `Profile id "${id}" must start with a lowercase letter and contain only lowercase letters, digits, and hyphens.` })
+    if (!PROFILE_ID_RE.test(id)) {
+      errors.push({ message: `Profile id "${id}" must start with a lowercase letter or digit and contain only lowercase letters, digits, and hyphens.` })
       continue
     }
 
@@ -118,7 +119,7 @@ export function resolveProfiles(input: unknown[]): {
       providerId = `opencode-go-${id}`
       if (!isValidProviderId(providerId)) {
         errors.push({
-          message: `Profile "${id}" generated invalid providerId "${providerId}". Profile id must start with a letter and contain only lowercase letters, digits, and hyphens.`,
+          message: `Profile "${id}" generated invalid providerId "${providerId}". Profile id must contain only lowercase letters, digits, and hyphens.`,
         })
         continue
       }

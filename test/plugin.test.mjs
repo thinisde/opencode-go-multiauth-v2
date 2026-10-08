@@ -190,7 +190,7 @@ test("malformed profiles and missing keys do not stop valid profiles", (t) => {
   environment(t)
   const resolved = resolveProfiles([
     null, [], 42, {},
-    { ...personal, id: "9bad" },
+    { ...personal, id: "-bad" },
     { ...personal, id: "bad-optional", providerId: 42 },
     { ...personal, id: "bad-url", baseURL: 42 },
     { ...personal, id: "bad-models", models: { invalid: null } },
@@ -223,4 +223,18 @@ test("OpenCode V2 resolves and loads the local plugin directory", async () => {
   const loaded = await Host.load(entrypoints.server)
   assert.equal(loaded.default.id, plugin.id)
   assert.equal(typeof loaded.default.setup, "function")
+})
+
+
+test("numbered profiles keep their existing provider namespaces", async (t) => {
+  environment(t)
+  const configured = context({ profiles: [
+    { ...personal, id: "1", models: { "glm-5.1": {} } },
+    { ...personal, id: "2", apiKeyEnv: "MULTIAUTH_TEST_WORK_KEY", models: { "glm-5.1": {} } },
+  ] })
+  await plugin.setup(configured.ctx)
+  assert.deepEqual(configured.sources.map(source => source.info.id), ["opencode-go-1", "opencode-go-2"])
+  configured.sources.forEach(valid)
+  const { errors } = resolveProfiles([{ ...personal, id: "3", providerId: "3" }])
+  assert.ok(errors.some(error => error.message.includes("malformed providerId")))
 })

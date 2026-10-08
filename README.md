@@ -4,7 +4,7 @@ OpenCode **V2** plugin that exposes multiple OpenCode Go subscription identities
 
 Select an account by choosing its model namespace, such as `opencode-go-personal/glm-5.1` or `opencode-go-work/glm-5.1`. Each provider has independent credentials. The plugin discovers the live model catalog and probes each model's API format, using native OpenAI-compatible or Anthropic-compatible routing as appropriate.
 
-Version 0.2.0 targets the OpenCode V2 plugin API shipped with `@opencode/plugin` **2.0.24**. It does not expose the V1 plugin function. For OpenCode V1, use the earlier 0.1.x implementation.
+Version 0.2.1 targets the OpenCode V2 plugin API shipped with `@opencode/plugin` **2.0.24**. It does not expose the V1 plugin function. For OpenCode V1, use the earlier 0.1.x implementation.
 
 ## Install
 
@@ -56,7 +56,7 @@ export OPENCODE_GO_PERSONAL_KEY="oc_go_xxxxxxxx"
 export OPENCODE_GO_WORK_KEY="oc_go_yyyyyyyy"
 ```
 
-Restart OpenCode after building or changing dependencies. Verify that `opencode-go-multi-auth` appears in the active plugin list and that the model picker contains the account namespaces. Through the V2 CLI API:
+Restart OpenCode after building or changing dependencies. The V2 background server owns plugins and must receive the exported key variables when it starts. If it was already running before you exported the keys, restart it from that shell with `opencode service restart`; restarting only the TUI does not update the server's environment. Do this when no sessions are actively generating. Keys remain in the process environment and do not need to be saved in service configuration. Verify that `opencode-go-multi-auth` appears in the active plugin list and that the model picker contains the account namespaces. Through the V2 CLI API:
 
 ```bash
 opencode api get /api/plugin
@@ -79,10 +79,10 @@ The generated provider IDs and model aliases stay the same. Legacy static model 
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `id` | yes | — | Starts with a lowercase letter; lowercase letters, digits, and hyphens |
+| `id` | yes | — | Starts with a lowercase letter or digit; lowercase letters, digits, and hyphens |
 | `name` | yes | — | Display name in the model picker |
 | `apiKeyEnv` | yes | — | Environment variable containing this account's API key |
-| `providerId` | no | `opencode-go-${id}` | Override the provider ID using the same identifier rules |
+| `providerId` | no | `opencode-go-${id}` | Override the provider ID; must start with a lowercase letter |
 | `baseURL` | no | `https://opencode.ai/zen/go/v1` | Upstream API base URL |
 | `models` | no | Live catalog from `/models` | Static map of model aliases to model overrides; skips discovery and probing |
 
@@ -170,6 +170,11 @@ Published packages include the compiled entrypoint and declarations; `@opencode/
 Official references: [V2 plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1) and [V2 provider transforms](https://opencode.ai/v2/docs/build/plugins/).
 
 ## Changelog
+
+### 0.2.1 — 2026-10-08
+
+- Restore numeric and digit-leading profile IDs accepted by the V1 implementation, so existing accounts such as `1` and `2` keep the `opencode-go-1` and `opencode-go-2` namespaces. Custom provider IDs still require a leading lowercase letter.
+- Add a regression test for numbered accounts and document that the V2 background server must inherit exported API-key variables; changing shell exports alone does not update an already-running server.
 
 ### 0.2.0 — 2026-10-08
 
